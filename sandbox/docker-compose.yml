@@ -1,0 +1,24 @@
+version: '3.8'
+services:
+  operator:
+    build:
+      context: .
+      dockerfile: operators/minimal/Dockerfile
+    container_name: minimal_operator
+    volumes:
+      - ..:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - minimal_net
+    
+  target:
+    build:
+      context: .
+      dockerfile: targets/minimal/Dockerfile
+    container_name: minimal_target
+    networks:
+      - minimal_net
+
+networks:
+  minimal_net:
+    driver: bridge

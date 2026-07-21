@@ -29,9 +29,13 @@ services:
       - MCP_SERVER_URL=http://tools:8000/sse
       - LOG_DIR=/app/tests
       - LOG_NAME=${LOG_NAME}
+      - OPERATOR_NAME=${OPERATOR:-minimal}
+      - TARGET_NAME=${TARGET:-minimal}
+      - PROFILE_NAME=${PROFILE:-default}
     volumes:
       - ./operators/${OPERATOR:-minimal}/agent.py:/app/agent.py:ro
-      - ../tests/${OPERATOR:-minimal}:/app/tests
+      - ../tests/logs:/app/tests
+      - ${PROFILE_PATH:-../tests/profiles/default.json}:/app/profile.json:ro
     networks:
       - graphos_net
     depends_on:

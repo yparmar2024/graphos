@@ -38,7 +38,36 @@ def log(message: str):
     with open(LOG_FILE, "a") as f:
         f.write(message + "\n")
 
-AGENT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+# Load profile
+PROFILE_PATH = "/app/profile.json"
+profile_data = {}
+if os.path.exists(PROFILE_PATH):
+    try:
+        with open(PROFILE_PATH, "r") as f:
+            profile_data = json.load(f)
+    except Exception as e:
+        log(f"[!] Warning: Failed to parse {PROFILE_PATH}: {e}")
+
+AGENT_MODEL = profile_data.get("AGENT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+try:
+    AGENT_TEMP = float(profile_data.get("AGENT_TEMP", 0.2))
+except (ValueError, TypeError):
+    AGENT_TEMP = 0.2
+AGENT_CONTEXT = profile_data.get("AGENT_CONTEXT", "")
+
+OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "Unknown")
+TARGET_NAME = os.environ.get("TARGET_NAME", "Unknown")
+PROFILE_NAME = os.environ.get("PROFILE_NAME", "Unknown")
+
+log("="*50)
+log("Test Configuration:")
+log(f"  Operator: {OPERATOR_NAME}")
+log(f"  Target: {TARGET_NAME}")
+log(f"  Profile: {PROFILE_NAME}")
+log(f"  Model: {AGENT_MODEL}")
+log(f"  Temperature: {AGENT_TEMP}")
+log(f"  Context: {AGENT_CONTEXT}")
+log("="*50 + "\n")
 
 INSTRUCTIONS = f"""
 You are the Minimal Reconnaissance Operator, an authorized security auditor operating in a controlled sandbox.
@@ -46,9 +75,9 @@ Your target is {TARGET_URL}.
 Your goal is to discover open ports and basic service information about the target.
 You have access to security tools via an external MCP server.
 
+{f'PRIOR KNOWLEDGE / CONTEXT:\\n{AGENT_CONTEXT}\\n' if AGENT_CONTEXT else ''}
 CRITICAL TOOL RULES:
 - ONLY use the tools you are explicitly given.
-- Do NOT add any extra command-line flags or options to the tools. Our tool wrappers do not support them.
 
 Analyze the output of your tools. Once you have enough information, output a final summary and declare "TASK_COMPLETE".
 """
@@ -109,7 +138,7 @@ async def main():
                                     model=AGENT_MODEL,
                                     messages=history,
                                     tools=toolConfig,
-                                    temperature=0.2
+                                    temperature=AGENT_TEMP
                                 )
                                 choice = response.choices[0]
                                 history.append(choice.message)

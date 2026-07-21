@@ -4,6 +4,7 @@
 OPERATOR=""
 TARGET=""
 LOG_NAME=""
+PROFILE="default"
 
 # Parse CLI arguments
 while [[ "$#" -gt 0 ]]; do
@@ -11,13 +12,14 @@ while [[ "$#" -gt 0 ]]; do
         --operator) OPERATOR="$2"; shift ;;
         --target) TARGET="$2"; shift ;;
         --log) LOG_NAME="$2"; shift ;;
+        --profile) PROFILE="$2"; shift ;;
         -h|--help)
-            echo "Usage: $0 --operator <name> --target <name> [--log <filename>]"
+            echo "Usage: $0 --operator <name> --target <name> [--log <filename>] [--profile <name>]"
             exit 0
             ;;
         *) 
             echo "Error: Unknown parameter passed: $1"
-            echo "Usage: $0 --operator <name> --target <name> [--log <filename>]"
+            echo "Usage: $0 --operator <name> --target <name> [--log <filename>] [--profile <name>]"
             exit 1 
             ;;
     esac
@@ -27,7 +29,7 @@ done
 # Validate required arguments
 if [[ -z "$OPERATOR" || -z "$TARGET" ]]; then
     echo "Error: Both --operator and --target arguments are required."
-    echo "Usage: $0 --operator <name> --target <name> [--log <filename>]"
+    echo "Usage: $0 --operator <name> --target <name> [--log <filename>] [--profile <name>]"
     exit 1
 fi
 
@@ -38,9 +40,12 @@ elif [[ "$LOG_NAME" != *".txt" ]]; then
     LOG_NAME="${LOG_NAME}.txt"
 fi
 
+PROFILE_PATH="../tests/profiles/${PROFILE}.json"
+
 echo "[*] Running Graphos Sandbox Factory"
 echo "  - Operator: $OPERATOR"
 echo "  - Target: $TARGET"
+echo "  - Profile: $PROFILE"
 echo "  - Log File: $LOG_NAME"
 echo ""
 
@@ -48,11 +53,11 @@ cd sandbox || exit 1
 
 # Run with --abort-on-container-exit so that when the agent script finishes (os._exit),
 # Docker automatically stops the rest of the containers in the cluster.
-TARGET=$TARGET OPERATOR=$OPERATOR LOG_NAME=$LOG_NAME docker-compose up --build --abort-on-container-exit
+TARGET=$TARGET OPERATOR=$OPERATOR LOG_NAME=$LOG_NAME PROFILE_PATH=$PROFILE_PATH docker-compose up --build --abort-on-container-exit
 
 echo ""
 echo "[*] Agent execution finished. Cleaning up dangling containers..."
 TARGET=$TARGET OPERATOR=$OPERATOR LOG_NAME=$LOG_NAME docker-compose down -v
 
 echo "[*] Sandbox shutdown complete."
-echo "View logs in: sandbox/tests/${OPERATOR}/${LOG_NAME}"
+echo "View logs in: tests/logs/${LOG_NAME}"

@@ -22,10 +22,7 @@ for toolName in os.listdir(toolsDir):
     spec.loader.exec_module(module)
     
     if hasattr(module, "execute"):
-        # We rename the function metadata so MCP registers it with the proper name
-        # We also convert tool_name to camelCase (e.g. nmap remains nmap, but run_tool would be runTool)
-        camelCaseName = "".join(word.capitalize() if i > 0 else word for i, word in enumerate(toolName.split('_')))
-        module.execute.__name__ = camelCaseName
+        module.execute.__name__ = toolName
         mcp.add_tool(module.execute)
 
 if __name__ == "__main__":

@@ -1,24 +1,42 @@
-version: '3.8'
 services:
+  target:
+    build: 
+      context: ./targets/${TARGET:-minimal}
+    networks:
+      - graphos_net
+    ports:
+      - "8080:80"
+
+  tools:
+    build:
+      context: ../tools
+      dockerfile: Dockerfile
+    environment:
+      - UVICORN_HOST=0.0.0.0
+      - UVICORN_PORT=8000
+    networks:
+      - graphos_net
+    ports:
+      - "8000:8000"
+
   operator:
     build:
-      context: .
-      dockerfile: operators/minimal/Dockerfile
-    container_name: minimal_operator
+      context: ./operators/${OPERATOR:-minimal}
+    env_file:
+      - ../.env
+    environment:
+      - TARGET_URL=http://target:80
+      - MCP_SERVER_URL=http://tools:8000/sse
+      - LOG_DIR=/app/tests
+      - LOG_NAME=${LOG_NAME}
     volumes:
-      - ..:/app
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./operators/${OPERATOR:-minimal}/agent.py:/app/agent.py:ro
+      - ../tests/${OPERATOR:-minimal}:/app/tests
     networks:
-      - minimal_net
-    
-  target:
-    build:
-      context: .
-      dockerfile: targets/minimal/Dockerfile
-    container_name: minimal_target
-    networks:
-      - minimal_net
+      - graphos_net
+    depends_on:
+      - target
 
 networks:
-  minimal_net:
+  graphos_net:
     driver: bridge

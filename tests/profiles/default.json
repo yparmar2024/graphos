@@ -1,0 +1,5 @@
+{
+  "AGENT_MODEL": "nvidia/nemotron-3-super-120b-a12b:free",
+  "AGENT_TEMP": 0.2,
+  "AGENT_CONTEXT": ""
+}

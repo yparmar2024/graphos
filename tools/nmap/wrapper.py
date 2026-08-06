@@ -52,8 +52,6 @@ def execute(
         
     cmd.append(target)
     
-    import tempfile
-    import os
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
         out_file = tmp.name
         

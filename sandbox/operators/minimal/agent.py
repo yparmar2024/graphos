@@ -4,7 +4,6 @@ import json
 import asyncio
 import httpx
 from datetime import datetime
-import openai
 from openai import OpenAI
 
 # MCP client imports

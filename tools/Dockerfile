@@ -4,7 +4,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y nmap curl ffuf wget build-essential
 
 RUN mkdir -p /app/tools/wordlists && \
-    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt -O /app/tools/wordlists/common.txt
+    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt -O /app/tools/wordlists/common.txt && \
+    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/quickhits.txt -O /app/tools/wordlists/quick.txt && \
+    wget -q https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/api/api-endpoints.txt -O /app/tools/wordlists/api.txt
 
 COPY . /app/tools/
 RUN pip install -r tools/requirements.txt

@@ -71,12 +71,11 @@ You have access to security tools via an external MCP server.
 {CONTEXT_INSTRUCTION}
 CRITICAL TOOL RULES:
 - ONLY use the tools you are explicitly given.
-- When you discover important information or receive large tool outputs, immediately use the `memory` tool to `store_finding` with a concise summary.
-- Use `add_node` and `add_relationship` in the `memory` tool to build a comprehensive knowledge graph mapping ALL key information about the target. DO NOT RELY ON YOUR INTERNAL MEMORY. Store everything in the graph so it can be referenced later.
+- When you discover important information or receive large tool outputs, immediately use the `memory` tool to `store_finding` with a concise summary. This will automatically add it to your Knowledge Graph.
 - If you lose track of what you are doing or need past context, use the `memory` tool's `semantic_search`.
-- You MUST declare TASK_COMPLETE in your very next response after finalizing the graph.
+- You MUST declare TASK_COMPLETE in your very next response after finalizing your investigation.
 
-Analyze the output of your tools. Once you have enough information, output a final summary based on your graph and declare "TASK_COMPLETE".
+Analyze the output of your tools. Once you have enough information, use `get_graph` to review everything you know, output a final summary, and declare "TASK_COMPLETE".
 """
 
 async def main():
@@ -154,7 +153,7 @@ async def main():
                                 return choice.message
                             except Exception as e:
                                 log(f"[!] Fatal Error on {AGENT_MODEL}: {e}")
-                                raise e
+                                raise SystemExit(e)
 
                         log("[*] Sending initial prompt...")
                         history.append({"role": "user", "content": "Begin your reconnaissance."})

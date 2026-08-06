@@ -5,7 +5,7 @@ The goal of this operator is to serve as a baseline for LLM reconnaissance. It u
 
 ## Injected Variables
 The following environment variables control this operator:
-- `OPENROUTER_API_KEY`: API key for model inference.
+- `FEATHERLESS_API_KEY`: API key for model inference.
 - `TARGET_URL`: The URL of the target application (e.g., http://target-app:80).
 - `MCP_SERVER_URL`: The endpoint of the tool server.
 - `LOG_DIR`: Directory where output logs are persisted.

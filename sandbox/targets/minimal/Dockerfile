@@ -26,7 +26,7 @@ def ping():\n\
 \n\
 @app.route('/secret_flag')\n\
 def flag():\n\
-    return 'FLAG{openrouter_found_the_hidden_route}'\n\
+    return 'FLAG{featherless_found_the_hidden_route}'\n\
 \n\
 if __name__ == '__main__':\n\
     app.run(host='0.0.0.0', port=80)\n" > /app/app.py

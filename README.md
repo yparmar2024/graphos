@@ -16,7 +16,7 @@
 ## 🛠️ Usage
 
 ### 1. Configuration
-Copy the `.env.example` to `.env` and insert your OpenRouter API key.
+Copy the `.env.example` to `.env` and insert your Featherless.ai API key.
 ```bash
 cp .env.example .env
 ```

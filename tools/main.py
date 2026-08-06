@@ -1,12 +1,16 @@
 import os
 import importlib.util
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 host = os.environ.get("HOST", "0.0.0.0")
-port = int(os.environ.get("PORT", "8000"))
+port = os.environ.get("PORT", "8000")
+
+# FastMCP requires environment variables to be set before import in some versions
+os.environ["FASTMCP_HOST"] = host
+os.environ["FASTMCP_PORT"] = str(port)
 
 # Initialize the MCP Server
-mcp = FastMCP("Graphos Security Operators", host=host, port=port)
+mcp = FastMCP("Graphos Security Operators")
 
 toolsDir = os.path.dirname(os.path.abspath(__file__))
 
@@ -26,4 +30,4 @@ for toolName in os.listdir(toolsDir):
         mcp.add_tool(module.execute)
 
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    mcp.run(transport="sse", host=host, port=int(port))

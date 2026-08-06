@@ -12,7 +12,7 @@ from mcp.client.sse import sse_client
 from mcp.client.session import ClientSession
 
 # Load configurations from Environment Variables
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+FEATHERLESS_API_KEY = os.environ.get("FEATHERLESS_API_KEY")
 TARGET_URL = os.environ.get("TARGET_URL", "http://localhost")
 # FastMCP SSE endpoints default to /sse
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://tools-server:8000/sse")
@@ -48,7 +48,7 @@ if os.path.exists(PROFILE_PATH):
     except Exception as e:
         log(f"[!] Warning: Failed to parse {PROFILE_PATH}: {e}")
 
-AGENT_MODEL = profile_data.get("AGENT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+AGENT_MODEL = profile_data.get("AGENT_MODEL", "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16")
 try:
     AGENT_TEMP = float(profile_data.get("AGENT_TEMP", 0.2))
 except (ValueError, TypeError):
@@ -69,13 +69,15 @@ log(f"  Temperature: {AGENT_TEMP}")
 log(f"  Context: {AGENT_CONTEXT}")
 log("="*50 + "\n")
 
+CONTEXT_INSTRUCTION = f"PREVIOUS INFORMATION:\n{AGENT_CONTEXT}\n" if AGENT_CONTEXT else ""
+
 INSTRUCTIONS = f"""
 You are the Minimal Reconnaissance Operator, an authorized security auditor operating in a controlled sandbox.
 Your target is {TARGET_URL}.
 Your goal is to discover open ports and basic service information about the target.
 You have access to security tools via an external MCP server.
 
-{f'PRIOR KNOWLEDGE / CONTEXT:\\n{AGENT_CONTEXT}\\n' if AGENT_CONTEXT else ''}
+{CONTEXT_INSTRUCTION}
 CRITICAL TOOL RULES:
 - ONLY use the tools you are explicitly given.
 
@@ -83,8 +85,8 @@ Analyze the output of your tools. Once you have enough information, output a fin
 """
 
 async def main():
-    if not OPENROUTER_API_KEY:
-        log("[!] Error: OPENROUTER_API_KEY is not set.")
+    if not FEATHERLESS_API_KEY:
+        log("[!] Error: FEATHERLESS_API_KEY is not set.")
         return
 
     log(f"[*] Starting Minimal Agent targeting {TARGET_URL}...")
@@ -119,13 +121,13 @@ async def main():
                                 "function": {
                                     "name": tool.name,
                                     "description": tool.description or "",
-                                    "parameters": tool.inputSchema
+                                    "parameters": tool.input_schema
                                 }
                             })
 
                         client = OpenAI(
-                            base_url="https://openrouter.ai/api/v1",
-                            api_key=OPENROUTER_API_KEY
+                            base_url="https://api.featherless.ai/v1",
+                            api_key=FEATHERLESS_API_KEY
                         )
                 
                         history = [
@@ -171,7 +173,7 @@ async def main():
                                         # Call the specific tool by name
                                         mcpResult = await session.call_tool(toolName, arguments=argsDict)
                                 
-                                        if mcpResult.isError:
+                                        if mcpResult.is_error:
                                             toolResult = f"MCP Tool Error: {mcpResult.content}"
                                         else:
                                             toolResult = "".join([c.text for c in mcpResult.content if getattr(c, 'type', '') == "text"])

@@ -66,14 +66,10 @@ def execute(
     Manages the agent's Vector Database and Knowledge Graph memory.
     
     Args:
-        action: Must be one of: 'store_finding', 'semantic_search', 'add_node', 'add_relationship', 'get_graph'.
+        action: Must be one of: 'store_finding', 'semantic_search', 'get_graph'.
         query: The search query for 'semantic_search'.
-        content: The text summary to store for 'store_finding'.
-        node: The node ID for 'add_node'.
-        source: The source node ID for 'add_relationship'.
-        target: The target node ID for 'add_relationship'.
-        relation: The relationship label for 'add_relationship'.
-        attributes: JSON string of key/value pairs to attach to a node or relationship.
+        content: The text summary to store for 'store_finding'. This will automatically create a node in the Knowledge Graph.
+        node: An optional title or ID for the finding. If not provided, one will be generated.
     
     Returns:
         String confirming the action or returning search results.
@@ -85,49 +81,16 @@ def execute(
             return "Error: 'content' parameter is required for store_finding."
         if collection is None:
             return "Error: Vector DB not initialized."
-        doc_id = f"finding_{collection.count() + 1}"
+        doc_id = node if node else f"finding_{collection.count() + 1}"
         collection.add(documents=[content], ids=[doc_id])
-        return f"Successfully stored finding as {doc_id} in Vector DB."
+        
+        # Automatically add it to the graph
+        graph.add_node(doc_id, content=content)
+        save_graph()
+        
+        return f"Successfully stored finding as {doc_id} in Vector DB and Knowledge Graph."
         
     elif action == "semantic_search":
-        if not query:
-            return "Error: 'query' parameter is required for semantic_search."
-        if collection is None:
-            return "Error: Vector DB not initialized."
-        
-        # Guard against querying an empty database
-        if collection.count() == 0:
-            return "Vector DB is currently empty."
-            
-        results = collection.query(query_texts=[query], n_results=3)
-        if not results.get('documents') or not results['documents'][0]:
-            return "No relevant findings found."
-        formatted_results = "\n\n".join(results['documents'][0])
-        return f"Top semantic search results:\n{formatted_results}"
-        
-    elif action == "add_node":
-        if not node:
-            return "Error: 'node' parameter is required for add_node."
-        try:
-            attrs = json.loads(attributes)
-        except:
-            attrs = {}
-        graph.add_node(node, **attrs)
-        save_graph()
-        return f"Successfully added node: {node}"
-        
-    elif action == "add_relationship":
-        if not source or not target or not relation:
-            return "Error: 'source', 'target', and 'relation' are required for add_relationship."
-        try:
-            attrs = json.loads(attributes)
-        except:
-            attrs = {}
-        graph.add_edge(source, target, label=relation, **attrs)
-        save_graph()
-        return f"Successfully added relationship: {source} -[{relation}]-> {target}"
-        
-    elif action == "get_graph":
         if graph is None:
             return "Graph not initialized."
         nodes = list(graph.nodes(data=True))

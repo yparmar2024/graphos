@@ -10,5 +10,5 @@
 .vscode/
 .env.local
 
-# Research-specific logs
-tests/logs/
+# Research-specific runs
+tests/runs/

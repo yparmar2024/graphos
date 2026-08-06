@@ -14,7 +14,7 @@ from mcp.client.session import ClientSession
 FEATHERLESS_API_KEY = os.environ.get("FEATHERLESS_API_KEY")
 TARGET_URL = os.environ.get("TARGET_URL", "http://localhost")
 # FastMCP SSE endpoints default to /sse
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://tools-server:8000/sse")
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://tools:8000/sse")
 LOG_DIR = os.environ.get("LOG_DIR", "/app/tests")
 
 # Setup logging
@@ -58,15 +58,7 @@ OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "Unknown")
 TARGET_NAME = os.environ.get("TARGET_NAME", "Unknown")
 PROFILE_NAME = os.environ.get("PROFILE_NAME", "Unknown")
 
-log("="*50)
-log("Test Configuration:")
-log(f"  Operator: {OPERATOR_NAME}")
-log(f"  Target: {TARGET_NAME}")
-log(f"  Profile: {PROFILE_NAME}")
-log(f"  Model: {AGENT_MODEL}")
-log(f"  Temperature: {AGENT_TEMP}")
-log(f"  Context: {AGENT_CONTEXT}")
-log("="*50 + "\n")
+
 
 CONTEXT_INSTRUCTION = f"PREVIOUS INFORMATION:\n{AGENT_CONTEXT}\n" if AGENT_CONTEXT else ""
 
@@ -79,8 +71,12 @@ You have access to security tools via an external MCP server.
 {CONTEXT_INSTRUCTION}
 CRITICAL TOOL RULES:
 - ONLY use the tools you are explicitly given.
+- When you discover important information or receive large tool outputs, immediately use the `memory` tool to `store_finding` with a concise summary.
+- Use `add_node` and `add_relationship` in the `memory` tool to build a comprehensive knowledge graph mapping ALL key information about the target. DO NOT RELY ON YOUR INTERNAL MEMORY. Store everything in the graph so it can be referenced later.
+- If you lose track of what you are doing or need past context, use the `memory` tool's `semantic_search`.
+- You MUST declare TASK_COMPLETE in your very next response after finalizing the graph.
 
-Analyze the output of your tools. Once you have enough information, output a final summary and declare "TASK_COMPLETE".
+Analyze the output of your tools. Once you have enough information, output a final summary based on your graph and declare "TASK_COMPLETE".
 """
 
 async def main():
@@ -92,6 +88,13 @@ async def main():
     log(f"[*] Logging output to {LOG_FILE}...")
     
     log(f"[*] Connecting to MCP Server at {MCP_SERVER_URL}...")
+    
+    start_time = time.time()
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_tool_calls = 0
+    tool_errors = 0
+    total_turns = 0
     
     try:
         # Retry loop to handle the race condition where the tools-server Uvicorn 
@@ -134,6 +137,7 @@ async def main():
                         ]
                 
                         def generate_next_response():
+                            nonlocal total_prompt_tokens, total_completion_tokens, total_turns
                             try:
                                 response = client.chat.completions.create(
                                     model=AGENT_MODEL,
@@ -142,6 +146,10 @@ async def main():
                                     temperature=AGENT_TEMP
                                 )
                                 choice = response.choices[0]
+                                if getattr(response, 'usage', None):
+                                    total_prompt_tokens += getattr(response.usage, 'prompt_tokens', 0)
+                                    total_completion_tokens += getattr(response.usage, 'completion_tokens', 0)
+                                total_turns += 1
                                 history.append(choice.message)
                                 return choice.message
                             except Exception as e:
@@ -158,9 +166,15 @@ async def main():
                         
                             if "TASK_COMPLETE" in (responseMessage.content or ""):
                                 log("\n[*] Agent has completed its task. Exiting loop.")
+                                report_file = os.path.join(LOG_DIR, "report.md")
+                                report_content = responseMessage.content.replace("TASK_COMPLETE", "").strip()
+                                if report_content:
+                                    with open(report_file, "w") as rf:
+                                        rf.write(report_content)
                                 break
                         
                             if responseMessage.tool_calls:
+                                total_tool_calls += len(responseMessage.tool_calls)
                                 for call in responseMessage.tool_calls:
                                     argsDict = json.loads(call.function.arguments)
                                     toolName = call.function.name
@@ -173,6 +187,7 @@ async def main():
                                         mcpResult = await session.call_tool(toolName, arguments=argsDict)
                                 
                                         if mcpResult.is_error:
+                                            tool_errors += 1
                                             toolResult = f"MCP Tool Error: {mcpResult.content}"
                                         else:
                                             toolResult = "".join([c.text for c in mcpResult.content if getattr(c, 'type', '') == "text"])
@@ -198,9 +213,37 @@ async def main():
 
                         # If we successfully completed the loop without breaking due to connection error, 
                         # we break out of the retry loop.
+                        end_time = time.time()
+                        
+                        error_rate = (tool_errors / total_tool_calls * 100) if total_tool_calls > 0 else 0
+                        avg_tokens_per_turn = (total_prompt_tokens / total_turns) if total_turns > 0 else 0
+                        
+                        nodes_count = 0
+                        edges_count = 0
+                        graph_path = os.path.join(LOG_DIR, "memory", "graph.graphml")
+                        if os.path.exists(graph_path):
+                            try:
+                                with open(graph_path, 'r') as gf:
+                                    content = gf.read()
+                                    nodes_count = content.count("<node ")
+                                    edges_count = content.count("<edge ")
+                            except: pass
+
+                        data_file = os.path.join(LOG_DIR, "data.txt")
+                        with open(data_file, "w") as f:
+                            f.write(f"Total Time (s): {end_time - start_time:.2f}\n")
+                            f.write(f"Total Turns: {total_turns}\n")
+                            f.write(f"Prompt Tokens: {total_prompt_tokens}\n")
+                            f.write(f"Completion Tokens: {total_completion_tokens}\n")
+                            f.write(f"Total Tokens: {total_prompt_tokens + total_completion_tokens}\n")
+                            f.write(f"Avg Tokens per Turn: {avg_tokens_per_turn:.2f}\n")
+                            f.write(f"Total Tool Calls: {total_tool_calls}\n")
+                            f.write(f"Tool Errors: {tool_errors} ({error_rate:.1f}%)\n")
+                            f.write(f"Graph Nodes: {nodes_count}\n")
+                            f.write(f"Graph Edges: {edges_count}\n")
                         break
                 
-            except httpx.ConnectError as e:
+            except Exception as e:
                 if attempt < max_retries - 1:
                     log(f"[!] Connection failed, retrying in 3 seconds... (Attempt {attempt+1}/{max_retries})")
                     await asyncio.sleep(3)

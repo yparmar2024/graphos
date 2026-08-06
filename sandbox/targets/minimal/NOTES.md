@@ -11,3 +11,6 @@ The goal of this target is to provide a trivial, highly controlled vulnerable ap
 - Python 3.9-slim
 - Flask
 - iputils-ping (provides the underlying ping binary for the injection point)
+
+## Configuration
+- **Port:** `80` (defined in `config.env`)

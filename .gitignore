@@ -12,3 +12,10 @@
 
 # Research-specific runs
 tests/runs/
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/

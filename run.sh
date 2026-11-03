@@ -40,8 +40,14 @@ docker compose version >/dev/null
 docker info >/dev/null
 TARGET_PORT=80
 if [[ -f "$ROOT/sandbox/targets/$TARGET/config.env" ]]; then
-    while IFS='=' read -r key value; do
-        [[ "$key" != TARGET_PORT ]] || TARGET_PORT="$value"
+    while IFS='=' read -r key value || [[ -n "$key" ]]; do
+        if [[ "$key" == TARGET_PORT ]]; then
+            value="${value%$'\r'}"
+            value="${value#\"}"
+            value="${value%\"}"
+            value="${value#\'}"
+            TARGET_PORT="${value%\'}"
+        fi
     done < "$ROOT/sandbox/targets/$TARGET/config.env"
 fi
 if [[ ! "$TARGET_PORT" =~ ^[0-9]+$ ]]; then

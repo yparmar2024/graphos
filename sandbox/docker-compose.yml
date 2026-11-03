@@ -1,47 +1,50 @@
 services:
   target:
-    build: 
+    build:
       context: ./targets/${TARGET:-minimal}
-    networks:
-      - graphos_net
+    networks: [graphos_net]
     ports:
-      - "8080:${TARGET_PORT:-80}"
+      - "127.0.0.1:${TARGET_HOST_PORT:-8080}:${TARGET_PORT:-80}"
 
   tools:
     build:
       context: ../tools
-      dockerfile: Dockerfile
+    user: "${RUN_UID:-1000}:${RUN_GID:-1000}"
     environment:
-      - UVICORN_HOST=0.0.0.0
-      - UVICORN_PORT=8000
-    networks:
-      - graphos_net
-    ports:
-      - "8000:8000"
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    networks: [graphos_net]
     volumes:
-      - ${RUN_DIR}/memory:/app/run/memory
+      - ${RUN_DIR:?Set RUN_DIR}/memory:/app/run/memory
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), timeout=2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   operator:
     build:
       context: ./operators/${OPERATOR:-minimal}
-    env_file:
-      - ../.env
+    user: "${RUN_UID:-1000}:${RUN_GID:-1000}"
+    env_file: ["${ENV_FILE:-../.env}"]
     environment:
-      - TARGET_URL=http://target:${TARGET_PORT:-80}
-      - MCP_SERVER_URL=http://tools:8000/sse
-      - LOG_DIR=/app/run
-      - LOG_NAME=log.txt
-      - OPERATOR_NAME=${OPERATOR:-minimal}
-      - TARGET_NAME=${TARGET:-minimal}
-      - PROFILE_NAME=${PROFILE:-default}
+      HOME: /tmp
+      TARGET_URL: http://target:${TARGET_PORT:-80}
+      MCP_SERVER_URL: http://tools:8000/sse
+      LOG_DIR: /app/run
+      OPERATOR_NAME: ${OPERATOR:-minimal}
+      TARGET_NAME: ${TARGET:-minimal}
+      PROFILE_NAME: ${PROFILE:-default}
     volumes:
-      - ./operators/${OPERATOR:-minimal}/agent.py:/app/agent.py:ro
-      - ${RUN_DIR}:/app/run
+      - ${RUN_DIR:?Set RUN_DIR}:/app/run
       - ${RUN_DIR}/profile.json:/app/profile.json:ro
-    networks:
-      - graphos_net
+    networks: [graphos_net]
     depends_on:
-      - target
+      target:
+        condition: service_healthy
+      tools:
+        condition: service_healthy
 
 networks:
   graphos_net:

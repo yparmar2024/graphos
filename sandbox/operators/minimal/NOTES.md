@@ -1,14 +1,9 @@
-# Minimal Reconnaissance Operator
+# Minimal reconnaissance operator
 
-## Goal
-The goal of this operator is to serve as a baseline for LLM reconnaissance. It uses a minimal system prompt and dynamically discovers tools exposed by the MCP server to map out a target's attack surface.
+This is the single-agent baseline. It discovers MCP tool schemas, performs reconnaissance, and writes JSON event logs, metrics, and a final report into `LOG_DIR`.
 
-## Injected Variables
-The following environment variables control this operator:
-- `FEATHERLESS_API_KEY`: API key for model inference.
-- `TARGET_URL`: The URL of the target application (e.g., http://target-app:80).
-- `MCP_SERVER_URL`: The endpoint of the tool server.
-- `LOG_DIR`: Directory where output logs are persisted.
+Model settings and resource limits come from the selected profile under `tests/profiles/`, mounted at `/app/profile.json`. `AGENT_MODEL`, `AGENT_TEMP`, and `AGENT_CONTEXT` are profile keys, not shell environment overrides. Runtime addresses and credentials use `TARGET_URL`, `MCP_SERVER_URL`, and `FEATHERLESS_API_KEY`.
 
-## Instructions / A/B Testing
-To test different behaviors, you can modify the `AGENT_MODEL` inside `agent.py` or inject variables like `TEMPERATURE` directly into the docker-compose environment block. Since the agent has no persistent memory between runs, each execution is completely isolated and deterministic based on the model.
+Only recent completed exchanges are resent to the model. Scan observations are automatically persisted by tools and can be retrieved through memory. Repeated identical non-memory requests are limited to two executions. Errors, timeouts, exhausted completion budgets, and turn limits produce nonzero exit statuses; they are not successful trials.
+
+Runs are isolated but are not deterministic: provider behavior, sampling, and environment timing can vary. Compare repeated trials with saved profiles and repository revisions.

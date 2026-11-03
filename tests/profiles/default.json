@@ -1,5 +1,10 @@
 {
   "AGENT_MODEL": "moonshotai/Kimi-K3",
   "AGENT_TEMP": 0.2,
-  "AGENT_CONTEXT": "Your core objective is to map the attack surface of the target. Specifically, you are looking for:\n1. Hidden or unlinked endpoints (using fuzzing).\n2. Endpoints that lack authentication.\n3. Sensitive information disclosure in HTML comments or headers.\n\nSTOPPING CONDITION:\nDo not scan forever. You must declare TASK_COMPLETE immediately after you have:\n1. Port scanned the target.\n2. Fuzzed the target for hidden directories.\n3. Investigated any interesting findings from steps 1 and 2.\nOnce those three phases are complete, summarize your findings and stop."
+  "AGENT_CONTEXT": "Your core objective is to map the attack surface of the target. Specifically, you are looking for:\n1. Hidden or unlinked endpoints (using fuzzing).\n2. Endpoints that lack authentication.\n3. Sensitive information disclosure in HTML comments or headers.\n\nSTOPPING CONDITION:\nDo not scan forever. You must declare TASK_COMPLETE immediately after you have:\n1. Port scanned the target.\n2. Fuzzed the target for hidden directories.\n3. Investigated any interesting findings from steps 1 and 2.\nOnce those three phases are complete, summarize your findings and stop.",
+  "MAX_TURNS": 24,
+  "HISTORY_TURNS": 8,
+  "MAX_COMPLETION_TOKENS": 2048,
+  "MODEL_TIMEOUT_SECONDS": 120,
+  "TRIAL_TIMEOUT_SECONDS": 600
 }

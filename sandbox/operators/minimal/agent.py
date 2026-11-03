@@ -1,262 +1,230 @@
+"""Bounded reconnaissance operator with per-step timing and durable run metrics."""
+
+import asyncio
+import json
 import os
 import time
-import json
-import asyncio
-import httpx
-from datetime import datetime
-from openai import OpenAI
+from contextlib import AsyncExitStack
+from datetime import datetime, timezone
+from pathlib import Path
 
-# MCP client imports
-from mcp.client.sse import sse_client
 from mcp.client.session import ClientSession
+from mcp.client.sse import sse_client
+from openai import AsyncOpenAI
 
-# Load configurations from Environment Variables
-FEATHERLESS_API_KEY = os.environ.get("FEATHERLESS_API_KEY")
-TARGET_URL = os.environ.get("TARGET_URL", "http://localhost")
-# FastMCP SSE endpoints default to /sse
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://tools:8000/sse")
-LOG_DIR = os.environ.get("LOG_DIR", "/app/tests")
-
-# Setup logging
-os.makedirs(LOG_DIR, exist_ok=True)
-logName = os.environ.get("LOG_NAME")
-
-if not logName:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logName = f"test_{timestamp}.txt"
-
-LOG_FILE = os.path.join(LOG_DIR, logName)
-
-# Clear the log file at the start of each run if it already exists
-with open(LOG_FILE, "w") as f:
-    pass
-
-def log(message: str):
-    """Helper to print to console and write to the log file."""
-    print(message)
-    with open(LOG_FILE, "a") as f:
-        f.write(message + "\n")
-
-# Load profile
-PROFILE_PATH = "/app/profile.json"
-profile_data = {}
-if os.path.exists(PROFILE_PATH):
-    try:
-        with open(PROFILE_PATH, "r") as f:
-            profile_data = json.load(f)
-    except Exception as e:
-        log(f"[!] Warning: Failed to parse {PROFILE_PATH}: {e}")
-
-AGENT_MODEL = profile_data.get("AGENT_MODEL", "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16")
-try:
-    AGENT_TEMP = float(profile_data.get("AGENT_TEMP", 0.2))
-except (ValueError, TypeError):
-    AGENT_TEMP = 0.2
-AGENT_CONTEXT = profile_data.get("AGENT_CONTEXT", "")
-
-OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "Unknown")
-TARGET_NAME = os.environ.get("TARGET_NAME", "Unknown")
-PROFILE_NAME = os.environ.get("PROFILE_NAME", "Unknown")
-
-
-
-CONTEXT_INSTRUCTION = f"PREVIOUS INFORMATION:\n{AGENT_CONTEXT}\n" if AGENT_CONTEXT else ""
-
-INSTRUCTIONS = f"""
-You are the Minimal Reconnaissance Operator, an authorized security auditor operating in a controlled sandbox.
-Your target is {TARGET_URL}.
-Your goal is to discover open ports and basic service information about the target.
-You have access to security tools via an external MCP server.
-
-{CONTEXT_INSTRUCTION}
-CRITICAL TOOL RULES:
-- ONLY use the tools you are explicitly given.
-- When you discover important information or receive large tool outputs, immediately use the `memory` tool to `store_finding` with a concise summary. This will automatically add it to your Knowledge Graph.
-- If you lose track of what you are doing or need past context, use the `memory` tool's `semantic_search`.
-- You MUST declare TASK_COMPLETE in your very next response after finalizing your investigation.
-
-Analyze the output of your tools. Once you have enough information, use `get_graph` to review everything you know, output a final summary, and declare "TASK_COMPLETE".
+INSTRUCTIONS = """You are an authorized reconnaissance operator in a controlled sandbox.
+Target: {target}
+Discover open ports, services, and relevant web endpoints using only supplied tools.
+Tools automatically store scan findings. Do not store those observations again.
+Use memory(action='semantic_search', query=...) for relevant findings and
+memory(action='get_graph') for a bounded overview. Record novel observations with
+memory(action='store_finding'). Distinguish observations from verified vulnerabilities.
+Avoid repeated scans. Finish after scanning ports, discovering endpoints, and inspecting
+interesting results. End your final report with TASK_COMPLETE on its own line.
+{context}
 """
 
-async def main():
-    if not FEATHERLESS_API_KEY:
-        log("[!] Error: FEATHERLESS_API_KEY is not set.")
-        return
 
-    log(f"[*] Starting Minimal Agent targeting {TARGET_URL}...")
-    log(f"[*] Logging output to {LOG_FILE}...")
-    
-    log(f"[*] Connecting to MCP Server at {MCP_SERVER_URL}...")
-    
-    start_time = time.time()
-    total_prompt_tokens = 0
-    total_completion_tokens = 0
-    total_tool_calls = 0
-    tool_errors = 0
-    total_turns = 0
-    
-    try:
-        # Retry loop to handle the race condition where the tools-server Uvicorn 
-        # takes a few seconds to actually bind to the port and accept connections.
-        max_retries = 5
-        for attempt in range(max_retries):
+def load_profile(path):
+    profile = json.loads(path.read_text()) if path.exists() else {}
+    defaults = {
+        "MAX_TURNS": 24,
+        "HISTORY_TURNS": 8,
+        "MAX_COMPLETION_TOKENS": 2048,
+        "MODEL_TIMEOUT_SECONDS": 120,
+        "TRIAL_TIMEOUT_SECONDS": 600,
+    }
+    for key, default in defaults.items():
+        value = profile.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{key} must be a positive integer")
+        profile[key] = value
+    temperature = float(profile.get("AGENT_TEMP", 0.2))
+    if not 0 <= temperature <= 2:
+        raise ValueError("AGENT_TEMP must be between 0 and 2")
+    profile["AGENT_TEMP"] = temperature
+    return profile
+
+
+async def connect(stack, url):
+    for attempt in range(5):
+        candidate = AsyncExitStack()
+        try:
+            read, write = await candidate.enter_async_context(sse_client(url))
+            session = await candidate.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            await stack.enter_async_context(candidate)
+            return session
+        except Exception:
+            await candidate.aclose()
+            if attempt == 4:
+                raise
+            await asyncio.sleep(2)
+
+
+async def run_agent(session, client, profile, target, run_dir, metrics, event):
+    available = await session.list_tools()
+    tool_config = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": tool.inputSchema,
+            },
+        }
+        for tool in available.tools
+    ]
+    initial = [
+        {
+            "role": "system",
+            "content": INSTRUCTIONS.format(target=target, context=profile.get("AGENT_CONTEXT", "")),
+        },
+        {"role": "user", "content": "Begin your reconnaissance."},
+    ]
+    turns = []
+    repeated = {}
+    for _ in range(profile["MAX_TURNS"]):
+        history = initial + [
+            message for turn in turns[-profile["HISTORY_TURNS"] :] for message in turn
+        ]
+        started = time.monotonic()
+        response = await client.chat.completions.create(
+            model=profile.get("AGENT_MODEL", "moonshotai/Kimi-K3"),
+            messages=history,
+            tools=tool_config,
+            temperature=profile["AGENT_TEMP"],
+            max_tokens=profile["MAX_COMPLETION_TOKENS"],
+        )
+        duration = time.monotonic() - started
+        metrics["model_seconds"] += duration
+        metrics["turns"] += 1
+        usage = response.usage
+        if usage:
+            metrics["prompt_tokens"] += usage.prompt_tokens
+            metrics["completion_tokens"] += usage.completion_tokens
+        choice = response.choices[0]
+        message = choice.message
+        event(
+            "model",
+            seconds=duration,
+            usage=usage.model_dump() if usage else None,
+            finish_reason=choice.finish_reason,
+            message=message.model_dump(exclude_none=True),
+        )
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                "Model exhausted its completion budget; trial stopped without claiming success"
+            )
+        turn = [message.model_dump(exclude_none=True)]
+        turns.append(turn)
+        if not message.tool_calls:
+            if (message.content or "").strip().splitlines()[-1:] == ["TASK_COMPLETE"]:
+                (run_dir / "report.md").write_text(
+                    message.content.rsplit("TASK_COMPLETE", 1)[0].strip() + "\n"
+                )
+                metrics["status"] = "completed"
+                return
+            turn.append(
+                {
+                    "role": "user",
+                    "content": "Execute the next necessary tool, or give your final report ending with TASK_COMPLETE.",
+                }
+            )
+            continue
+        for call in message.tool_calls:
+            metrics["tool_calls"] += 1
+            started = time.monotonic()
             try:
-                # Establish the asynchronous SSE connection to the tools-server
-                async with sse_client(MCP_SERVER_URL) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        # Initialize the MCP connection payload
-                        await session.initialize()
-                        log("[*] Successfully initialized MCP Session. Brain is now connected to Hands!")
-                        
-                        # Discover available tools on the server
-                        toolsResponse = await session.list_tools()
-                        log("\n[*] Available Tools from MCP Server:")
-                        
-                        toolConfig = []
-                        for tool in toolsResponse.tools:
-                            log(f"  - {tool.name}: {tool.description}")
-                            
-                            # Convert MCP JSON schema to OpenAI tool schema
-                            toolConfig.append({
-                                "type": "function",
-                                "function": {
-                                    "name": tool.name,
-                                    "description": tool.description or "",
-                                    "parameters": tool.input_schema
-                                }
-                            })
+                arguments = json.loads(call.function.arguments)
+                signature = (call.function.name, json.dumps(arguments, sort_keys=True))
+                repeated[signature] = repeated.get(signature, 0) + 1
+                if call.function.name != "memory" and repeated[signature] > 2:
+                    raise ValueError(
+                        "Identical tool request already executed twice; use existing evidence"
+                    )
+                result = await session.call_tool(call.function.name, arguments=arguments)
+                output = "\n".join(item.text for item in result.content if item.type == "text")
+                if result.isError:
+                    metrics["tool_errors"] += 1
+            except Exception as exc:
+                metrics["tool_errors"] += 1
+                output = f"Tool error: {exc}"
+            duration = time.monotonic() - started
+            metrics["tool_seconds"] += duration
+            event(
+                "tool",
+                name=call.function.name,
+                arguments=call.function.arguments,
+                seconds=duration,
+                output=output,
+            )
+            turn.append({"role": "tool", "tool_call_id": call.id, "content": output[:24000]})
+    metrics["status"] = "turn_limit"
 
-                        client = OpenAI(
-                            base_url="https://api.featherless.ai/v1",
-                            api_key=FEATHERLESS_API_KEY
-                        )
-                
-                        history = [
-                            {"role": "system", "content": INSTRUCTIONS}
-                        ]
-                
-                        def generate_next_response():
-                            nonlocal total_prompt_tokens, total_completion_tokens, total_turns
-                            try:
-                                response = client.chat.completions.create(
-                                    model=AGENT_MODEL,
-                                    messages=history,
-                                    tools=toolConfig,
-                                    temperature=AGENT_TEMP
-                                )
-                                choice = response.choices[0]
-                                if getattr(response, 'usage', None):
-                                    total_prompt_tokens += getattr(response.usage, 'prompt_tokens', 0)
-                                    total_completion_tokens += getattr(response.usage, 'completion_tokens', 0)
-                                total_turns += 1
-                                history.append(choice.message)
-                                return choice.message
-                            except Exception as e:
-                                log(f"[!] Fatal Error on {AGENT_MODEL}: {e}")
-                                raise SystemExit(e)
 
-                        log("[*] Sending initial prompt...")
-                        history.append({"role": "user", "content": "Begin your reconnaissance."})
-                        responseMessage = generate_next_response()
-                
-                        while True:
-                            if responseMessage.content:
-                                log(f"\n[Agent]: {responseMessage.content}")
-                        
-                            if "TASK_COMPLETE" in (responseMessage.content or ""):
-                                log("\n[*] Agent has completed its task. Exiting loop.")
-                                report_file = os.path.join(LOG_DIR, "report.md")
-                                report_content = responseMessage.content.replace("TASK_COMPLETE", "").strip()
-                                if report_content:
-                                    with open(report_file, "w") as rf:
-                                        rf.write(report_content)
-                                break
-                        
-                            if responseMessage.tool_calls:
-                                total_tool_calls += len(responseMessage.tool_calls)
-                                for call in responseMessage.tool_calls:
-                                    argsDict = json.loads(call.function.arguments)
-                                    toolName = call.function.name
-                                    log(f"\n[System]: Agent requested tool execution: {toolName} -> {argsDict}")
-                            
-                                    try:
-                                        log(f"[*] Sending execution request to real MCP Server...")
-                                
-                                        # Call the specific tool by name
-                                        mcpResult = await session.call_tool(toolName, arguments=argsDict)
-                                
-                                        if mcpResult.is_error:
-                                            tool_errors += 1
-                                            toolResult = f"MCP Tool Error: {mcpResult.content}"
-                                        else:
-                                            toolResult = "".join([c.text for c in mcpResult.content if getattr(c, 'type', '') == "text"])
-                                    
-                                    except BaseException as e:
-                                        import traceback
-                                        toolResult = f"Error communicating with MCP server:\n{traceback.format_exc()}"
-                            
-                                    log(f"[System]: Result from MCP Server ->\n{toolResult}\n")
-                            
-                                    history.append({
-                                        "role": "tool",
-                                        "tool_call_id": call.id,
-                                        "name": toolName,
-                                        "content": toolResult
-                                    })
-                        
-                                responseMessage = generate_next_response()
-                            else:
-                                time.sleep(2)
-                                history.append({"role": "user", "content": "Continue your analysis or execute your next step."})
-                                responseMessage = generate_next_response()
+async def main():
+    run_dir = Path(os.environ.get("LOG_DIR", "/app/run"))
+    run_dir.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        "status": "failed",
+        "turns": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "tool_calls": 0,
+        "tool_errors": 0,
+        "model_seconds": 0,
+        "tool_seconds": 0,
+        "operator": os.environ.get("OPERATOR_NAME", "minimal"),
+        "target": os.environ.get("TARGET_NAME", "unknown"),
+        "profile": os.environ.get("PROFILE_NAME", "default"),
+    }
+    started = time.monotonic()
 
-                        # If we successfully completed the loop without breaking due to connection error, 
-                        # we break out of the retry loop.
-                        end_time = time.time()
-                        
-                        error_rate = (tool_errors / total_tool_calls * 100) if total_tool_calls > 0 else 0
-                        avg_tokens_per_turn = (total_prompt_tokens / total_turns) if total_turns > 0 else 0
-                        
-                        nodes_count = 0
-                        edges_count = 0
-                        graph_path = os.path.join(LOG_DIR, "memory", "graph.graphml")
-                        if os.path.exists(graph_path):
-                            try:
-                                with open(graph_path, 'r') as gf:
-                                    content = gf.read()
-                                    nodes_count = content.count("<node ")
-                                    edges_count = content.count("<edge ")
-                            except: pass
+    def event(kind, **data):
+        record = {"timestamp": datetime.now(timezone.utc).isoformat(), "kind": kind, **data}
+        with (run_dir / "events.jsonl").open("a") as stream:
+            stream.write(json.dumps(record) + "\n")
+        print(json.dumps(record), flush=True)
 
-                        data_file = os.path.join(LOG_DIR, "data.txt")
-                        with open(data_file, "w") as f:
-                            f.write(f"Total Time (s): {end_time - start_time:.2f}\n")
-                            f.write(f"Total Turns: {total_turns}\n")
-                            f.write(f"Prompt Tokens: {total_prompt_tokens}\n")
-                            f.write(f"Completion Tokens: {total_completion_tokens}\n")
-                            f.write(f"Total Tokens: {total_prompt_tokens + total_completion_tokens}\n")
-                            f.write(f"Avg Tokens per Turn: {avg_tokens_per_turn:.2f}\n")
-                            f.write(f"Total Tool Calls: {total_tool_calls}\n")
-                            f.write(f"Tool Errors: {tool_errors} ({error_rate:.1f}%)\n")
-                            f.write(f"Graph Nodes: {nodes_count}\n")
-                            f.write(f"Graph Edges: {edges_count}\n")
-                        break
-                
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    log(f"[!] Connection failed, retrying in 3 seconds... (Attempt {attempt+1}/{max_retries})")
-                    await asyncio.sleep(3)
-                else:
-                    raise e
-                    
-    except BaseException as e:
-        import traceback
-        log(f"[!] Fatal Connection Error with MCP Server:\n{traceback.format_exc()}")
+    try:
+        profile = load_profile(Path(os.environ.get("PROFILE_PATH", "/app/profile.json")))
+        key = os.environ.get("FEATHERLESS_API_KEY")
+        if not key or key == "your_featherless_api_key_here":
+            raise ValueError("Set FEATHERLESS_API_KEY in .env before running trials")
+        async with asyncio.timeout(profile["TRIAL_TIMEOUT_SECONDS"]):
+            async with AsyncExitStack() as stack:
+                session = await connect(
+                    stack, os.environ.get("MCP_SERVER_URL", "http://tools:8000/sse")
+                )
+                client = await stack.enter_async_context(
+                    AsyncOpenAI(
+                        base_url="https://api.featherless.ai/v1",
+                        api_key=key,
+                        timeout=profile["MODEL_TIMEOUT_SECONDS"],
+                        max_retries=0,
+                    )
+                )
+                await run_agent(
+                    session,
+                    client,
+                    profile,
+                    os.environ.get("TARGET_URL", "http://target:80"),
+                    run_dir,
+                    metrics,
+                    event,
+                )
+    except TimeoutError:
+        metrics["status"] = "timeout"
+        event("error", message="Trial exceeded its wall-clock budget")
+    except Exception as exc:
+        metrics["status"] = "failed"
+        event("error", message=str(exc))
+    finally:
+        metrics["total_seconds"] = time.monotonic() - started
+        (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+    return 0 if metrics["status"] == "completed" else 1
+
 
 if __name__ == "__main__":
-    # Start the asyncio event loop
-    asyncio.run(main())
-    
-    # Force exit to ensure no hanging background networking threads from MCP/httpx 
-    # prevent the container from cleanly shutting down.
-    os._exit(0)
+    raise SystemExit(asyncio.run(main()))

@@ -1,9 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
-
-RUN pip install openai httpx mcp
-
-RUN useradd -m agentuser
-USER agentuser
-
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY agent.py .
+ENV PYTHONUNBUFFERED=1
+USER 1000:1000
 CMD ["python", "agent.py"]

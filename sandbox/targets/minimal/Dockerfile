@@ -1,35 +1,8 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y iputils-ping && pip install flask
-
-RUN echo "from flask import Flask, request\n\
-import os, sys, signal\n\
-app = Flask(__name__)\n\
-\n\
-def handle_sigterm(*args):\n\
-    sys.exit(0)\n\
-signal.signal(signal.SIGTERM, handle_sigterm)\n\
-\n\
-@app.route('/')\n\
-def index():\n\
-    return 'Welcome to the Minimal Target! Try to find the flag or explore the /ping endpoint.'\n\
-\n\
-@app.route('/ping')\n\
-def ping():\n\
-    target = request.args.get('ip', '127.0.0.1')\n\
-    try:\n\
-        result = os.popen(f'ping -c 1 {target}').read()\n\
-        return f'<pre>{result}</pre>'\n\
-    except Exception as e:\n\
-        return str(e)\n\
-\n\
-@app.route('/secret_flag')\n\
-def flag():\n\
-    return 'FLAG{featherless_found_the_hidden_route}'\n\
-\n\
-if __name__ == '__main__':\n\
-    app.run(host='0.0.0.0', port=80)\n" > /app/app.py
-
+RUN apt-get update && apt-get install -y --no-install-recommends iputils-ping && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir Flask==3.1.2
+COPY app.py .
 EXPOSE 80
-CMD ["python", "/app/app.py"]
+HEALTHCHECK --interval=3s --timeout=5s --start-period=5s --retries=20 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:80/', timeout=3)"
+CMD ["python", "app.py"]
